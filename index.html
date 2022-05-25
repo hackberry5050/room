@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SkyWay - Room example</title>
+  </head>
+  <body>
+    <div class="container">
+      <h1 class="heading">Room example</h1>
+      <p class="note">
+        Change Room mode (before join in a room):
+        <a href="#">mesh</a> / <a href="#sfu">sfu</a>
+      </p>
+      <div class="room">
+        <div class="Videostream">
+          <video id="js-local-stream"></video>
+          <div class="remote-streams" id="js-remote-streams"></div>
+        </div>
+          <span id="js-room-mode"></span>
+          <input type="text" placeholder="Room Name" id="js-room-id">
+          <button id="js-join-trigger">Join</button>
+          <button id="js-leave-trigger">Leave</button>
+          <pre class="messages" id="js-messages"></pre>
+          <input type="text" id="js-local-text">
+          <button id="js-send-trigger">Send</button>
+          <div class="remote-streams-audio" id="js-remote-streams-audio"></div>
+      </div>
+      <p class="meta" id="js-meta"></p>
+    </div>
+    <pre></pre>
+    <script src="//cdn.webrtc.ecl.ntt.com/skyway-4.4.4.js"></script>
+    <script>
+      const Peer = window.Peer;
+      
+      (async function main() {
+        const localVideo = document.getElementById('js-local-stream');
+        const joinTrigger = document.getElementById('js-join-trigger');
+        const leaveTrigger = document.getElementById('js-leave-trigger');
+        const remoteVideos = document.getElementById('js-remote-streams');
+        //　下のところにpannerと数値を入れていく
+        const remoteAudios = document.getElementById('js-remote-streams-audio');
+        const roomId = document.getElementById('js-room-id');
+        const roomMode = document.getElementById('js-room-mode');
+        const localText = document.getElementById('js-local-text');
+        const sendTrigger = document.getElementById('js-send-trigger');
+        const messages = document.getElementById('js-messages');
+        const meta = document.getElementById('js-meta');
+        const sdkSrc = document.querySelector('script[src*=skyway]');
+        const pre = document.querySelector('pre');
+        const myScript = document.querySelector('script');
+        pre.innerHTML = myScript.innerHTML;
+      
+        meta.innerText = `
+          UA: ${navigator.userAgent}
+          SDK: ${sdkSrc ? sdkSrc.src : 'unknown'}
+        `.trim();
+      
+        const getRoomModeByHash = () => (location.hash === '#sfu' ? 'sfu' : 'mesh');
+      
+        roomMode.textContent = getRoomModeByHash();
+        window.addEventListener(
+          'hashchange',
+          () => (roomMode.textContent = getRoomModeByHash())
+        );
+      
+        const localStream = await navigator.mediaDevices
+          .getUserMedia({
+            audio: true,
+            video: true,
+          })
+          .catch(console.error);
+      
+        // Render local stream
+        localVideo.muted = true;
+        localVideo.srcObject = localStream;
+        localVideo.playsInline = true;
+        await localVideo.play().catch(console.error);
+      
+        // eslint-disable-next-line require-atomic-updates
+        const peer = (window.peer = new Peer({
+          key: "9b1cb579-8011-49d4-aff4-d88f29806640",
+          debug: 3,
+        }));
+      
+        // Register join handler
+        joinTrigger.addEventListener('click', () => {
+          // Note that you need to ensure the peer has connected to signaling server
+          // before using methods of peer instance.
+          if (!peer.open) {
+            return;
+          }
+      
+          const room = peer.joinRoom(roomId.value, {
+            mode: getRoomModeByHash(),
+            stream: localStream,
+          });
+      
+          room.once('open', () => {
+            messages.textContent += '=== You joined ===\n';
+          });
+          room.on('peerJoin', peerId => {
+            messages.textContent += `=== ${peerId} joined ===\n`;
+          });
+      
+          // Render remote stream for new peer join in the room
+          room.on('stream', async stream => {
+            const newVideo = document.createElement('video');
+            newVideo.srcObject = stream;
+            newVideo.playsInline = true;
+            newVideo.muted = "true";
+            // mark peerId to find it later at peerLeave event
+            newVideo.setAttribute('data-peer-id', stream.peerId);
+            remoteVideos.append(newVideo);
+            await newVideo.play().catch(console.error);
+      
+            //　人が入るごとにpannerを設置するためのものを生成する
+            const iptpanner = document.createElement("input");
+            const pannercontrol = document.createElement("span");
+            const conttext = document.createTextNode("0");
+            pannercontrol.appendChild(conttext);
+            const panID = String(stream.peerId)+"-"+"panning-control";
+            const panIDV= String(stream.peerId)+"-"+"panning-value";
+      
+            iptpanner.setAttribute("class",panID);
+            iptpanner.setAttribute("data-peer-id",stream.peerId);
+            iptpanner.setAttribute("type","range");
+            iptpanner.setAttribute("min","-1");
+            iptpanner.setAttribute("max","1");
+            iptpanner.setAttribute("step","0.1");
+            iptpanner.setAttribute("value","0");
+            pannercontrol.setAttribute("class",panIDV);
+            pannercontrol.setAttribute("data-peer-id",stream.peerId);
+            remoteAudios.append(iptpanner);
+            remoteAudios.append(pannercontrol);
+            //ここまではいけてる
+      
+      
+            const panControl = document.querySelector("."+panID);
+            const panValue = document.querySelector("."+panIDV);
+      
+            var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            var audiosource = audioCtx.createMediaStreamSource(stream);
+            var panNode = audioCtx.createStereoPanner();
+      
+            panControl.oninput = function() {
+              panNode.pan.value = panControl.value;
+              panValue.innerHTML = panControl.value;
+            };
+      
+            audiosource.connect(panNode);
+            panNode.connect(audioCtx.destination);
+      
+            //meshだと上手くいかない
+            //sfuだと上手くいくかも？
+      
+      
+      
+      
+      
+          });
+      
+          room.on('data', ({ data, src }) => {
+            // Show a message sent to the room and who sent
+            messages.textContent += `${src}: ${data}\n`;
+          });
+      
+          // for closing room members
+          room.on('peerLeave', peerId => {
+            const remoteVideo = remoteVideos.querySelector(
+              `[data-peer-id="${peerId}"]`
+            );
+            remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+            remoteVideo.srcObject = null;
+            remoteVideo.remove();
+      
+            const remoteAudio1 = remoteAudios.querySelector(
+              `[class="${String(peerId)+"-"+"panning-control"}"`
+            );
+            remoteAudio1.srcObject = null;
+            remoteAudio1.remove();
+      
+            const remoteAudio2 = remoteAudios.querySelector(
+              `[class="${String(peerId)+"-"+"panning-value"}"`
+            );
+            remoteAudio2.srcObject = null;
+            remoteAudio2.remove();
+      
+            messages.textContent += `=== ${peerId} left ===\n`;
+          });
+      
+          // for closing myself
+          room.once('close', () => {
+            sendTrigger.removeEventListener('click', onClickSend);
+            messages.textContent += '== You left ===\n';
+            Array.from(remoteVideos.children).forEach(remoteVideo => {
+              remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+              remoteVideo.srcObject = null;
+              remoteVideo.remove();});
+            Array.from(remoteAudios.children).forEach(remoteAudio => {
+              remoteAudio.srcObject = null;
+              remoteAudio.remove();}
+            );
+          });
+      
+          sendTrigger.addEventListener('click', onClickSend);
+          leaveTrigger.addEventListener('click', () => room.close(), { once: true });
+      
+          function onClickSend() {
+            // Send message to all of the peers in the room via websocket
+            room.send(localText.value);
+      
+            messages.textContent += `${peer.id}: ${localText.value}\n`;
+            localText.value = '';
+          }
+        });
+      
+        peer.on('error', console.error);
+      })();
+      
+    </script>
+  </body>
+</html>
+
